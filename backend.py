@@ -40,7 +40,6 @@ def load_config():
     except Exception as e:
         log(f"Error loading music.json: {e}", "error")
         return False
-
     try:
         with open("bot_config.json", "r") as f:
             config = json.load(f)
@@ -93,20 +92,14 @@ class MusicSelfbot(commands.Cog):
     async def on_connect(self):
         log(f"{self.bot.user} Connected to Discord", "info")
         log("Connecting to voice channel...", "info")
-        
         try:
-            # Connect to Lavalink node
             await wavelink.NodePool.create_node(bot=self.bot, host=host, port=port, password=password)
             log("Connected to music server", "info")
-            
-            # Connect to voice channel
             connection_success = await self.connect_vc()
             if not connection_success:
                 log("Failed to connect to voice channel", "error")
                 bot_status['status'] = 'Error: Failed to connect to voice channel'
                 return
-                
-            # Start playing music
             await self.play_next_song()
         except Exception as e:
             log(f"Error in on_connect: {e}", "error")
@@ -119,7 +112,6 @@ class MusicSelfbot(commands.Cog):
                 log(f"Voice channel with ID {voice_channel} not found. Make sure the ID is correct and the bot has access to it.", "error")
                 bot_status['status'] = f"Error: Voice channel {voice_channel} not found"
                 return False
-                
             self.current_vc: wavelink.Player = await channel.connect(cls=wavelink.Player)
             log(f"Connected to voice channel: {channel.name}", "success")
             return True
@@ -147,24 +139,18 @@ class MusicSelfbot(commands.Cog):
     async def play_next_song(self):
         global bot_status, music_query
         self.playing = False
-        
-        # Check if we have a valid voice channel connection
         if not self.current_vc:
             log("Cannot play music: Not connected to a voice channel", "error")
             bot_status['status'] = 'Error: Not connected to a voice channel'
             return
-            
         song_name = music_query
         log(f"Searching for: {song_name}", "info")
         bot_status['status'] = 'Searching'
-        
         try:
-            # Try to find the song
             youtube_id = extract_youtube_id(song_name)
             if youtube_id:
                 log(f"Found YouTube ID: {youtube_id}", "info")
                 query = f"https://www.youtube.com/watch?v={youtube_id}"
-                # Use a task for the search to handle timeouts properly
                 search_task = asyncio.create_task(wavelink.YouTubeTrack.search(query=query, return_first=True))
                 try:
                     song = await asyncio.wait_for(search_task, timeout=15.0)
@@ -174,7 +160,6 @@ class MusicSelfbot(commands.Cog):
                     return
             else:
                 log("Searching YouTube...", "info")
-                # Use a task for the search to handle timeouts properly
                 search_task = asyncio.create_task(wavelink.YouTubeTrack.search(query=song_name))
                 try:
                     songs = await asyncio.wait_for(search_task, timeout=15.0)
@@ -187,12 +172,9 @@ class MusicSelfbot(commands.Cog):
                     log("Search timed out", "error")
                     bot_status['status'] = 'Error: Search timed out'
                     return
-                
-            # Play the song
             log(f"Playing: {song.title} by {song.author}", "success")
             play_task = asyncio.create_task(self.current_vc.play(song))
             volume_task = asyncio.create_task(self.current_vc.set_volume(100))
-            
             try:
                 await asyncio.wait_for(play_task, timeout=10.0)
                 await asyncio.wait_for(volume_task, timeout=5.0)
@@ -200,8 +182,6 @@ class MusicSelfbot(commands.Cog):
                 log("Timeout while trying to play the song", "error")
                 bot_status['status'] = 'Error: Timeout while playing'
                 return
-            
-            # Update status
             self.current_track = song
             self.playing = True
             bot_status['status'] = 'Playing'
@@ -211,10 +191,7 @@ class MusicSelfbot(commands.Cog):
                 'url': song.uri,
                 'thumbnail': f"https://img.youtube.com/vi/{extract_youtube_id(song.uri)}/hqdefault.jpg" if extract_youtube_id(song.uri) else None
             }
-            
-            # Start updating the console
             console_update_task = asyncio.create_task(self.update_console())
-            
         except Exception as e:
             error_msg = f"Error while searching or playing the track: {e}"
             log(error_msg, "error")
@@ -225,29 +202,21 @@ class MusicSelfbot(commands.Cog):
         try:
             while self.playing:
                 try:
-                    # Check if we still have a valid connection
                     if not self.current_vc or not self.current_track:
                         self.playing = False
                         break
-                        
-                    # Get the current position and duration
                     position = self.current_vc.position // 1000
                     duration = self.current_track.length // 1000
                     pos_mins, pos_secs = divmod(position, 60)
                     dur_mins, dur_secs = divmod(duration, 60)
-                    
-                    # Update the status
                     bot_status['position'] = position
                     bot_status['duration'] = duration
                     song_info = f"[{pos_mins:02}:{pos_secs:02} | {dur_mins:02}:{dur_secs:02}] -> {self.current_track.title}"
                     bot_status['status'] = f'Playing: {song_info}'
-                    
-                    # Use a timeout-safe sleep
                     try:
                         await asyncio.wait_for(asyncio.sleep(1), timeout=2.0)
                     except asyncio.TimeoutError:
                         pass
-                        
                 except Exception as e:
                     log(f"Error updating console: {e}", "error")
                     await asyncio.sleep(1)
@@ -305,93 +274,70 @@ def stop():
     bot_status['status'] = 'Stopping'
     try:
         if client:
-            # Get the event loop that was created when starting the bot
             try:
-                # Try to get the running event loop from the client's loop
                 loop = client.loop
                 if not loop or not loop.is_running():
                     log("No running event loop found, creating a new one", "warning")
                     loop = None
             except Exception:
                 loop = None
-                
-            # If we couldn't get a running loop, find or create one
             if loop is None:
                 try:
-                    # Try to get the current event loop
                     loop = asyncio.get_event_loop()
                 except RuntimeError:
-                    # If there's no event loop in this thread, create a new one
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-            
-            # First try to leave voice channel if connected
             try:
                 cog = client.get_cog('MusicSelfbot')
                 if cog and cog.current_vc:
                     log("Leaving voice channel...", "info")
                     
-                    # Create a task to disconnect from voice channel
                     async def leave_voice():
                         try:
                             await cog.current_vc.disconnect()
                             log("Left voice channel successfully", "success")
                         except Exception as e:
                             log(f"Error leaving voice channel: {e}", "error")
-                    
-                    # Run the coroutine in the event loop
                     if loop.is_running():
-                        # If loop is running, use run_coroutine_threadsafe
                         future = asyncio.run_coroutine_threadsafe(leave_voice(), loop)
                         try:
                             future.result(timeout=5)
                         except Exception as e:
                             log(f"Timeout or error while leaving voice channel: {e}", "warning")
                     else:
-                        # If loop is not running, use run_until_complete
                         try:
                             loop.run_until_complete(leave_voice())
                         except Exception as e:
                             log(f"Error in run_until_complete for leaving voice channel: {e}", "error")
             except Exception as e:
                 log(f"Error while trying to leave voice channel: {e}", "error")
-            
-            # Then close the client
             log("Closing Discord client...", "info")
             try:
-                # Create a task to close the client
                 async def close_client():
                     try:
                         await client.close()
                         log("Discord client closed successfully", "success")
                     except Exception as e:
                         log(f"Error closing client: {e}", "error")
-                
-                # Run the coroutine in the event loop
                 if loop.is_running():
-                    # If loop is running, use run_coroutine_threadsafe
                     future = asyncio.run_coroutine_threadsafe(close_client(), loop)
                     try:
                         future.result(timeout=5)
                     except Exception as e:
                         log(f"Timeout or error while closing client: {e}", "warning")
                 else:
-                    # If loop is not running, use run_until_complete
                     try:
                         loop.run_until_complete(close_client())
                     except Exception as e:
                         log(f"Error in run_until_complete for closing client: {e}", "error")
             except Exception as e:
                 log(f"Error while closing Discord client: {e}", "error")
-        
-        # Stop the event loop if it's running
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 loop.stop()
         except Exception as e:
             log(f"Error stopping event loop: {e}", "warning")
-        
         bot_status['status'] = 'Stopped'
         bot_status['track'] = None
         bot_initialized = False
